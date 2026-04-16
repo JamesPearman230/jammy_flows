@@ -11,9 +11,10 @@ except:
     print("Sympy not installed!")
 
 def searchsorted(bin_locations, inputs, eps=1e-6):
-    bin_locations[..., -1] += eps
+    last = bin_locations[..., -1:] + eps
+    adjusted = torch.cat([bin_locations[..., :-1], last], dim=-1)
     return torch.sum(
-        inputs >= bin_locations,
+        inputs >= adjusted,
         dim=-1,
         keepdims=True
     ) - 1
@@ -33,10 +34,6 @@ def rational_quadratic_spline(inputs,
                               restrict_max_min_width_height_ratio=-1.0):
 
         
-        if torch.min(inputs) < left or torch.max(inputs) > right:
-           
-            raise Exception("outside boundaries in rational-spline flow! (min/max (%.2f/%.2f), allowed: (%.2f/%.2f)" % (torch.min(inputs), torch.max(inputs), left, right))
-
         num_bins = unnormalized_widths.shape[-1]
 
         if rel_min_bin_width * num_bins > 1.0:

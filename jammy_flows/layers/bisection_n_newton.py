@@ -56,15 +56,10 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
 
     prev = mid
 
-    # Newton iterations — compile-friendly variant.  The original code sliced
-    # `prev[above_tolerance_mask, :]` each iter to only operate on unconverged
-    # rows, but boolean-mask indexing produces a tensor with an unbacked symint
-    # size which breaks `torch.compile(fullgraph=True)`.  Instead, compute on
-    # the full batch every iteration and gate the update with `torch.where`
-    # so converged rows stay frozen.  Fixed `num_newton_iter` is done — no
-    # data-dependent early exit.  For our use case (D=1, num_newton_iter=20)
-    # the extra compute on converged rows is negligible and compile-trace
-    # fusion more than makes up for it.
+    # Changes to the Newton iterations for compile:
+    # 1. Keep the full batch each iteration, using torch.where to only update where
+    #    non-converged (used to slice the batch in 'prev[above_tolerance_mask, :]')
+    # 2. Removed the early exiting when converging so full number of iterations are completed
     active_row = torch.ones(target_arg.shape[0], dtype=torch.bool, device=target_arg.device)
     for i in range(num_newton_iter):
         fn_result, f_prime_eval = joint_func(prev, *args)

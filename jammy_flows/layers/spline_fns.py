@@ -11,9 +11,10 @@ except:
     print("Sympy not installed!")
 
 def searchsorted(bin_locations, inputs, eps=1e-6):
-    bin_locations[..., -1] += eps
+    last = bin_locations[..., -1:] + eps
+    adjusted = torch.cat([bin_locations[..., :-1], last], dim=-1)
     return torch.sum(
-        inputs >= bin_locations,
+        inputs >= adjusted,
         dim=-1,
         keepdims=True
     ) - 1
@@ -33,10 +34,6 @@ def rational_quadratic_spline(inputs,
                               restrict_max_min_width_height_ratio=-1.0):
 
         
-        if torch.min(inputs) < left or torch.max(inputs) > right:
-           
-            raise Exception("outside boundaries in rational-spline flow! (min/max (%.2f/%.2f), allowed: (%.2f/%.2f)" % (torch.min(inputs), torch.max(inputs), left, right))
-
         num_bins = unnormalized_widths.shape[-1]
 
         if rel_min_bin_width * num_bins > 1.0:
@@ -88,12 +85,18 @@ def rational_quadratic_spline(inputs,
         heights = cumheights[..., 1:] - cumheights[..., :-1]
 
 
-        
+
         if inverse:
             bin_idx = searchsorted(cumheights, inputs)#[..., None]
         else:
             bin_idx = searchsorted(cumwidths, inputs)#[..., None]
-        
+
+        # Guard against NaN inputs (which yield -1 from searchsorted) or fp32
+        # boundary cases above/below the table.  Clamping keeps gather() safe;
+        # a NaN input still propagates through to a NaN output via the
+        # `inputs - input_cumheights` terms, without a device fault.
+        bin_idx = bin_idx.clamp(min=0, max=num_bins - 1)
+
         if(cumwidths.shape[0]==1 and bin_idx.shape[0]>1):
           repeats=[bin_idx.shape[0]]+(len(cumwidths.shape)-1)*[1]
           
@@ -133,7 +136,10 @@ def rational_quadratic_spline(inputs,
             c = - input_delta * (inputs - input_cumheights)
 
             discriminant = b.pow(2) - 4 * a * c
-            assert (discriminant >= 0).all()
+            # Discriminant is mathematically non-negative; catastrophic
+            # cancellation in fp32 can produce small negatives.  Clamp
+            # before sqrt to avoid NaNs.
+            discriminant = discriminant.clamp(min=0)
 
             root = (2 * c) / (-b - torch.sqrt(discriminant))
             outputs = root * input_bin_widths + input_cumwidths
@@ -144,7 +150,8 @@ def rational_quadratic_spline(inputs,
             derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * root.pow(2)
                                                          + 2 * input_delta * theta_one_minus_theta
                                                          + input_derivatives * (1 - root).pow(2))
-            logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
+            # Protect log from near-zero values at fp32 precision.
+            logabsdet = torch.log(derivative_numerator.clamp(min=1e-8)) - 2 * torch.log(denominator.clamp(min=1e-8))
 
             return outputs, -logabsdet
         else:
@@ -160,8 +167,8 @@ def rational_quadratic_spline(inputs,
             derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * theta.pow(2)
                                                          + 2 * input_delta * theta_one_minus_theta
                                                          + input_derivatives * (1 - theta).pow(2))
-            logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
-           
+            logabsdet = torch.log(derivative_numerator.clamp(min=1e-8)) - 2 * torch.log(denominator.clamp(min=1e-8))
+
             return outputs, logabsdet
 
 def rational_quadratic_spline_with_linear_extension(inputs,

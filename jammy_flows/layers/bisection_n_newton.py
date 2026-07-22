@@ -37,6 +37,8 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
         Tensor
             The inverse of the function *func* in each sub-dimension in each batch item.
 
+    TODO: Make implicit at some point.
+
     """
     new_upper = torch.full_like(target_arg, max_boundary)
     new_lower = torch.full_like(target_arg, min_boundary)
@@ -68,6 +70,10 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
         update = f_eval / f_prime_eval
 
         newsource = prev - update
+        # Upstream NaN/inf correction (folded in unconditionally to stay
+        # compile-friendly): a non-finite Newton update falls back to the
+        # previous iterate instead of poisoning the result.
+        newsource = torch.where(torch.isfinite(newsource), newsource, prev)
         prev = torch.where(active_row.unsqueeze(-1), newsource, prev)
 
         still_active = torch.abs(update).sum(dim=1) >= newton_tolerance
